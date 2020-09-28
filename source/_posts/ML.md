@@ -4,7 +4,9 @@ date: 2020-09-23 22:17:06
 tags: Activation
 categories: ML Basic
 ---
-## 1.**Mish**
+## **1.Mish**
+
+<!--more-->
 
 ```python
 # -*- coding: utf-8 -*-
@@ -29,8 +31,6 @@ plt.plot(x,y)
 plt.grid()
 plt.show()
 ```
-
-<!--more-->
 
 ![Mish](https://raw.githubusercontent.com/sunnygy/blogImages/master/img/mish.png)
 

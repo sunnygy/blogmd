@@ -5,7 +5,9 @@ tags: Dependence looking up
 categories: spring
 ---
 
-## 1. The Bean will be built up by  inner AbstractApplicationContext when looking up
+
+
+## 1.The Bean will be built up by  inner AbstractApplicationContext when looking up
 
 <!--more-->
 
