@@ -400,3 +400,190 @@ public void registerDependentBean(String beanName, String dependentBeanName) {
 }
 ```
 
+### 第6步：创建Singleton Bean
+
+```java
+sharedInstance = getSingleton(beanName, new ObjectFactory<Object>() {
+						@Override
+						public Object getObject() throws BeansException {
+							try {
+								return createBean(beanName, mbd, args);
+							}
+							catch (BeansException ex) {
+								// Explicitly remove instance from singleton cache: It might have been put there
+								// eagerly by the creation process, to allow for circular reference resolution.
+								// Also remove any beans that received a temporary reference to the bean.
+								destroySingleton(beanName);
+								throw ex;
+							}
+						}
+					});
+```
+
+首先，创建了一个singletonFactory用于创建Bean，并重写了工厂的getObject()：createBean(beanName, mbd, args)。这个方法就是真正的Bean的实例创建操作，之后再详细介绍。
+然后通过getSingleton(String beanName, ObjectFactory<?> singletonFactory)，得到Bean的实例。
+
+```java
+/**
+	 * Return the (raw) singleton object registered under the given name,
+	 * creating and registering a new one if none registered yet.
+	 * @param beanName the name of the bean
+	 * @param singletonFactory the ObjectFactory to lazily create the singleton
+	 * with, if necessary
+	 * @return the registered singleton object
+	 */
+	public Object getSingleton(String beanName, ObjectFactory<?> singletonFactory) {
+		Assert.notNull(beanName, "'beanName' must not be null");
+		synchronized (this.singletonObjects) {
+			Object singletonObject = this.singletonObjects.get(beanName);
+			if (singletonObject == null) {
+				if (this.singletonsCurrentlyInDestruction) {
+					throw new BeanCreationNotAllowedException(beanName,
+							"Singleton bean creation not allowed while the singletons of this factory are in destruction " +
+							"(Do not request a bean from a BeanFactory in a destroy method implementation!)");
+				}
+				if (logger.isDebugEnabled()) {
+					logger.debug("Creating shared instance of singleton bean '" + beanName + "'");
+				}
+				beforeSingletonCreation(beanName);
+				boolean newSingleton = false;
+				boolean recordSuppressedExceptions = (this.suppressedExceptions == null);
+				if (recordSuppressedExceptions) {
+					this.suppressedExceptions = new LinkedHashSet<Exception>();
+				}
+				try {
+					singletonObject = singletonFactory.getObject();
+					newSingleton = true;
+				}
+				catch (IllegalStateException ex) {
+					// Has the singleton object implicitly appeared in the meantime ->
+					// if yes, proceed with it since the exception indicates that state.
+					singletonObject = this.singletonObjects.get(beanName);
+					if (singletonObject == null) {
+						throw ex;
+					}
+				}
+				catch (BeanCreationException ex) {
+					if (recordSuppressedExceptions) {
+						for (Exception suppressedException : this.suppressedExceptions) {
+							ex.addRelatedCause(suppressedException);
+						}
+					}
+					throw ex;
+				}
+				finally {
+					if (recordSuppressedExceptions) {
+						this.suppressedExceptions = null;
+					}
+					afterSingletonCreation(beanName);
+				}
+				if (newSingleton) {
+					addSingleton(beanName, singletonObject);
+				}
+			}
+			return (singletonObject != NULL_OBJECT ? singletonObject : null);
+		}
+	}
+```
+
+在工厂中做了以下几件事：
+
+- 加锁，避免重复创建；
+- 先尝试从缓存中获取；
+- 在创建之前，将此BeanName存入缓存：singletonsCurrentlyInCreation，意义是标记此Bean正在创建中。
+- 调用工厂的getObject方法，也就是createBean（），这个方法是一个Bean完整的创建过程。
+- 创建之后，将此BeanName从缓存singletonsCurrentlyInCreation中移出来。
+- 最后addSingleton(beanName, singletonObject)，意义是此时的Bean已经完全的被创建完毕，从二级、三级缓存中移除，放入到一级缓存中
+
+```java
+/**
+	 * Add the given singleton object to the singleton cache of this factory.
+	 * <p>To be called for eager registration of singletons.
+	 * @param beanName the name of the bean
+	 * @param singletonObject the singleton object
+	 */
+	protected void addSingleton(String beanName, Object singletonObject) {
+		synchronized (this.singletonObjects) {
+			this.singletonObjects.put(beanName, (singletonObject != null ? singletonObject : NULL_OBJECT));
+			this.singletonFactories.remove(beanName);
+			this.earlySingletonObjects.remove(beanName);
+			this.registeredSingletons.add(beanName);
+		}
+	}
+
+```
+
+### 第7步：创建Prototype Bean
+
+```java
+Object prototypeInstance = null;
+					try {
+						beforePrototypeCreation(beanName);
+						prototypeInstance = createBean(beanName, mbd, args);
+					}
+					finally {
+						afterPrototypeCreation(beanName);
+					}
+
+```
+
+与单例模式的Bean不同的是，直接调用了CreateBean方法，而没有为此Bean创建工厂。原因当然是因为Prototype类型Bean每次都创建一个新的，不需要加锁、不需要先尝试从缓存中获取、不需要实例创建完成后放入缓存，所以直接直接createBean创建即可。
+
+### 第9步：getObjectForBeanInstance判断是否为FactoryBean
+
+```java
+/**
+	 * Get the object for the given bean instance, either the bean
+	 * instance itself or its created object in case of a FactoryBean.
+	 * @param beanInstance the shared bean instance
+	 * @param name name that may include factory dereference prefix
+	 * @param beanName the canonical bean name
+	 * @param mbd the merged bean definition
+	 * @return the object to expose for the bean
+	 */
+	protected Object getObjectForBeanInstance(
+			Object beanInstance, String name, String beanName, RootBeanDefinition mbd) {
+
+		// Don't let calling code try to dereference the factory if the bean isn't a factory.
+		if (BeanFactoryUtils.isFactoryDereference(name) && !(beanInstance instanceof FactoryBean)) {
+			throw new BeanIsNotAFactoryException(transformedBeanName(name), beanInstance.getClass());
+		}
+
+		// Now we have the bean instance, which may be a normal bean or a FactoryBean.
+		// If it's a FactoryBean, we use it to create a bean instance, unless the
+		// caller actually wants a reference to the factory.
+		if (!(beanInstance instanceof FactoryBean) || BeanFactoryUtils.isFactoryDereference(name)) {
+			return beanInstance;
+		}
+
+		Object object = null;
+		if (mbd == null) {
+			object = getCachedObjectForFactoryBean(beanName);
+		}
+		if (object == null) {
+			// Return bean instance from factory.
+			FactoryBean<?> factory = (FactoryBean<?>) beanInstance;
+			// Caches object obtained from FactoryBean if it is a singleton.
+			if (mbd == null && containsBeanDefinition(beanName)) {
+				mbd = getMergedLocalBeanDefinition(beanName);
+			}
+			boolean synthetic = (mbd != null && mbd.isSynthetic());
+			object = getObjectFromFactoryBean(factory, beanName, !synthetic);
+		}
+		return object;
+	}
+
+```
+
+这个方法将目标Bean分为了三种情况：
+
+- 此Bean不是FactoryBean，则直接返回
+- 此Bean是FactoryBean类型，且名字以&开头，则直接返回（返回此FactoryBean的原生对象单例bean）
+- 此Bean是FactoryBean类型，且名字不是以&开头，则返回此FactoryBean的getObject()得到的bean实例。当然，不可能每一次用到这个Bean的时候都调用一次getObject()方法，spring中也有一个factoryBeanObjectCache缓存，用来记录FactoryBean类型Bean的返回对象：
+
+```java
+/** Cache of singleton objects created by FactoryBeans: FactoryBean name --> object */
+	private final Map<String, Object> factoryBeanObjectCache = new ConcurrentHashMap<String, Object>(16);
+
+```
+
